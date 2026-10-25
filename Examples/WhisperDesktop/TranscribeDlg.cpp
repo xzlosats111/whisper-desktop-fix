@@ -40,6 +40,100 @@ static bool makeBatchOutputPath( CString& output, const CString& input, int form
 	return renamed;
 }
 
+namespace
+{
+	struct sTemporaryWav
+	{
+		CString path;
+		~sTemporaryWav()
+		{
+			if( !path.IsEmpty() )
+				DeleteFile( path );
+		}
+	};
+
+	bool findFfmpeg( CString& path )
+	{
+		wchar_t modulePath[ MAX_PATH ];
+		const DWORD length = GetModuleFileName( nullptr, modulePath, ARRAYSIZE( modulePath ) );
+		if( length > 0 && length < ARRAYSIZE( modulePath ) && PathRemoveFileSpec( modulePath ) )
+		{
+			CString adjacent = modulePath;
+			adjacent += L"\\ffmpeg.exe";
+			if( PathFileExists( adjacent ) )
+			{
+				path = adjacent;
+				return true;
+			}
+		}
+
+		const DWORD needed = SearchPath( nullptr, L"ffmpeg.exe", nullptr, 0, nullptr, nullptr );
+		if( needed == 0 )
+			return false;
+		std::vector<wchar_t> buffer( needed + 1 );
+		if( SearchPath( nullptr, L"ffmpeg.exe", nullptr, (DWORD)buffer.size(), buffer.data(), nullptr ) == 0 )
+			return false;
+		path = buffer.data();
+		return true;
+	}
+
+	HRESULT convertFlvToWav( const CString& source, CString& temporaryWav, CString& error )
+	{
+		CString ffmpeg;
+		if( !findFfmpeg( ffmpeg ) )
+		{
+			error = L"无法读取 FLV：Windows 的媒体组件通常不支持 FLV。\n"
+				L"请把 ffmpeg.exe 放到 WhisperDesktop.exe 同一目录，然后重试。";
+			return HRESULT_FROM_WIN32( ERROR_FILE_NOT_FOUND );
+		}
+
+		wchar_t tempFolder[ MAX_PATH ];
+		const DWORD folderLength = GetTempPath( ARRAYSIZE( tempFolder ), tempFolder );
+		if( folderLength == 0 || folderLength >= ARRAYSIZE( tempFolder ) )
+			return HRESULT_FROM_WIN32( GetLastError() );
+		wchar_t tempName[ MAX_PATH ];
+		if( GetTempFileName( tempFolder, L"wsp", 0, tempName ) == 0 )
+			return HRESULT_FROM_WIN32( GetLastError() );
+
+		CString wavPath = tempName;
+		DeleteFile( wavPath );
+		wchar_t* extensionBuffer = wavPath.GetBufferSetLength( wavPath.GetLength() + 5 );
+		if( !PathRenameExtension( extensionBuffer, L".wav" ) )
+		{
+			wavPath.ReleaseBuffer();
+			return E_FAIL;
+		}
+		wavPath.ReleaseBuffer();
+
+		CString commandLine;
+		commandLine.Format( L"\"%s\" -hide_banner -loglevel error -nostdin -y -i \"%s\" -vn -ac 1 -ar 16000 -f wav \"%s\"", cstr( ffmpeg ), cstr( source ), cstr( wavPath ) );
+		std::vector<wchar_t> command( commandLine.GetLength() + 1 );
+		wcscpy_s( command.data(), command.size(), commandLine );
+
+		STARTUPINFO si;
+		memset( &si, 0, sizeof( si ) );
+		si.cb = sizeof( si );
+		PROCESS_INFORMATION pi;
+		memset( &pi, 0, sizeof( pi ) );
+		if( !CreateProcess( nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi ) )
+			return HRESULT_FROM_WIN32( GetLastError() );
+		CloseHandle( pi.hThread );
+		WaitForSingleObject( pi.hProcess, INFINITE );
+		DWORD exitCode = 1;
+		GetExitCodeProcess( pi.hProcess, &exitCode );
+		CloseHandle( pi.hProcess );
+		if( exitCode != 0 || !PathFileExists( wavPath ) )
+		{
+			DeleteFile( wavPath );
+			error.Format( L"FFmpeg 无法解码此 FLV 文件（退出代码 %u）。", exitCode );
+			return E_FAIL;
+		}
+
+		temporaryWav = wavPath;
+		return S_OK;
+	}
+}
+
 LRESULT TranscribeDlg::OnInitDialog( UINT nMessage, WPARAM wParam, LPARAM lParam, BOOL& bHandled )
 {
 	// First DDX call, hooks up variables to controls.
@@ -477,6 +571,19 @@ LRESULT TranscribeDlg::onCallbackStatus( UINT, WPARAM wParam, LPARAM, BOOL& bHan
 	}
 	else if( transcribeArgs.outputFiles.size() > 1 )
 		message += L"\n输出文件已分别保存到各源文件所在目录。";
+	if( !transcribeArgs.failedFiles.empty() )
+	{
+		message.AppendFormat( L"\n已跳过 %zu 个失败文件，其他文件已继续处理。", transcribeArgs.failedFiles.size() );
+		message += L"\n失败文件: ";
+		for( size_t i = 0; i < transcribeArgs.failedFiles.size() && i < 3; i++ )
+		{
+			if( i != 0 )
+				message += L"；";
+			message += PathFindFileName( transcribeArgs.failedFiles[ i ] );
+		}
+		if( transcribeArgs.failedFiles.size() > 3 )
+			message += L"；…";
+	}
 
 	MessageBox( message, L"转写完成", MB_OK | MB_ICONINFORMATION );
 	return 0;
@@ -494,7 +601,9 @@ HRESULT TranscribeDlg::transcribe()
 	transcribeArgs.startTime = GetTickCount64();
 	transcribeArgs.mediaDuration = 0;
 	transcribeArgs.completedFiles = 0;
-	transcribeArgs.errorMessage = L"";
+	transcribeArgs.failedFiles.clear();
+	transcribeArgs.failureDetails.Empty();
+	transcribeArgs.errorMessage.Empty();
 
 	for( size_t i = 0; i < transcribeArgs.mediaFiles.size(); i++ )
 	{
@@ -503,10 +612,29 @@ HRESULT TranscribeDlg::transcribe()
 		transcribeArgs.pathMedia = transcribeArgs.mediaFiles[ i ];
 		if( i < transcribeArgs.outputFiles.size() )
 			transcribeArgs.pathOutput = transcribeArgs.outputFiles[ i ];
+		transcribeArgs.errorMessage.Empty();
 		HRESULT hr = transcribeOne();
 		if( FAILED( hr ) )
-			return hr;
+		{
+			CString reason = transcribeArgs.errorMessage;
+			if( reason.IsEmpty() )
+				reason = formatErrorMessage( hr );
+			transcribeArgs.failedFiles.emplace_back( transcribeArgs.pathMedia );
+			transcribeArgs.failureDetails += PathFindFileName( transcribeArgs.pathMedia );
+			transcribeArgs.failureDetails += L": ";
+			transcribeArgs.failureDetails += reason;
+			transcribeArgs.failureDetails += L"\n";
+			if( transcribeArgs.format != eOutputFormat::None )
+				DeleteFile( transcribeArgs.pathOutput );
+			continue;
+		}
 		transcribeArgs.completedFiles++;
+	}
+
+	if( transcribeArgs.completedFiles == 0 && !transcribeArgs.failedFiles.empty() )
+	{
+		transcribeArgs.errorMessage = transcribeArgs.failureDetails;
+		return E_FAIL;
 	}
 	return S_OK;
 }
@@ -516,9 +644,41 @@ HRESULT TranscribeDlg::transcribeOne()
 	clearLastError();
 
 	using namespace Whisper;
+	// Declare the temporary before the reader: C++ then releases the reader first,
+	// so the temporary WAV is no longer held open when its destructor deletes it.
+	sTemporaryWav temporaryWav;
 	CComPtr<iAudioReader> reader;
 
-	CHECK_EX( appState.mediaFoundation->openAudioFile( transcribeArgs.pathMedia, false, &reader ) );
+	HRESULT openHr = appState.mediaFoundation->openAudioFile( transcribeArgs.pathMedia, false, &reader );
+	if( FAILED( openHr ) )
+	{
+		CString extension = PathFindExtension( transcribeArgs.pathMedia );
+		if( 0 != extension.CompareNoCase( L".flv" ) )
+		{
+			getThreadError();
+			return openHr;
+		}
+
+		// Media Foundation cannot normally decode FLV. Convert it to a temporary WAV
+		// through the bundled sidecar ffmpeg.exe, then use the existing audio pipeline.
+		clearLastError();
+		HRESULT convertHr = convertFlvToWav( transcribeArgs.pathMedia, temporaryWav.path, transcribeArgs.errorMessage );
+		if( FAILED( convertHr ) )
+			return convertHr;
+		openHr = appState.mediaFoundation->openAudioFile( temporaryWav.path, false, &reader );
+		if( FAILED( openHr ) )
+		{
+			CString mediaError;
+			getLastError( mediaError );
+			transcribeArgs.errorMessage = L"FFmpeg 已转换 FLV，但 Windows 无法打开临时 WAV。";
+			if( !mediaError.IsEmpty() )
+			{
+				transcribeArgs.errorMessage += L"\n";
+				transcribeArgs.errorMessage += mediaError;
+			}
+			return openHr;
+		}
+	}
 
 	const eOutputFormat format = transcribeArgs.format;
 	CAtlFile outputFile;

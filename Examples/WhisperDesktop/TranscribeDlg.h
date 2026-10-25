@@ -108,6 +108,8 @@ private:
 		CString pathOutput;
 		std::vector<CString> mediaFiles;
 		std::vector<CString> outputFiles;
+		std::vector<CString> failedFiles;
+		CString failureDetails;
 		size_t completedFiles = 0;
 		uint32_t language;
 		bool translate;

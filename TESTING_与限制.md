@@ -7,6 +7,7 @@
 - 启动行为改为始终先显示选择模型窗口，不自动加载上次模型。
 - 文件选择器使用 Windows `OFN_ALLOWMULTISELECT`，支持 Ctrl/Shift 多选；批量任务逐个转写并为每个源文件生成对应扩展名的输出文件。
 - 已对修改运行 `git diff --check`，并检查批量选择、文件筛选、SRT 默认、完整资源控件和 UTF-8 BOM 的静态条件。
+- FLV 文件在原 Windows Media Foundation 打开失败后，会尝试调用旁边的 `ffmpeg.exe` 转为临时 WAV；批量任务会记录失败项、删除其不完整输出并继续后续文件。
 
 ## 仍未在本工作区执行的测试
 

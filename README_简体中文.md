@@ -9,7 +9,8 @@
 - 默认语言为**日语**、默认输出为 **SubRip（.srt）**，但语言、翻译、字幕类型、输出位置均可自行选择；
 - 保留全部原有界面与功能：模型实现/GPU 高级设置、调试控制台、文件转写、实时麦克风转写、语言选择、翻译、文本/SRT/WebVTT 输出；
 - 媒体选择器加入 AVI、MP4、MKV、MOV、MPEG、WebM、FLV、WMV、WAV、MP3、M4A、AAC、FLAC、OGG 等常见格式；
-- 文件选择窗口支持按 **Ctrl / Shift 多选**；多选后会依次转写，每个文件输出同名字幕到各自源文件所在目录。
+- 文件选择窗口支持按 **Ctrl / Shift 多选**；多选后会依次转写，每个文件输出同名字幕到各自源文件所在目录；单个文件失败会被记录并跳过，后续文件继续处理。
+- Windows Media Foundation 无法正常解码 FLV 时，会自动调用成品包内同目录的 `ffmpeg.exe` 转换为临时 WAV 后再转写；GitHub Actions 会将该文件一并放入 `WhisperDesktop-x64`。
 
 ## 日语 SRT 的常用操作
 
