@@ -1,5 +1,6 @@
 #pragma once
 #include <iContext.h>
+#include <vector>
 #include "logger.h"
 
 CString formatErrorMessage( HRESULT hr );
@@ -37,6 +38,9 @@ void makeUtf16( CString& rdi, const char* utf8 );
 void makeUtf8( CStringA& rdi, const CString& utf16 );
 
 bool getOpenFileName( HWND owner, LPCTSTR title, LPCTSTR filter, CString& path );
+
+// Explorer multi-select file picker. On success, returns one or more absolute paths.
+bool getOpenFileNames( HWND owner, LPCTSTR title, LPCTSTR filter, const CString& initialPath, std::vector<CString>& paths );
 
 bool getSaveFileName( HWND owner, LPCTSTR title, LPCTSTR filter, CString& path, DWORD* filterIndex = nullptr );
 

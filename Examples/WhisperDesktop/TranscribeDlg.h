@@ -74,6 +74,8 @@ private:
 	TranslateCheckbox cbTranslate;
 
 	CEdit sourceMediaPath;
+	std::vector<CString> selectedMediaPaths;
+	bool settingMediaPath = false;
 	CButton useInputFolder;
 	CEdit transcribeOutputPath;
 	CButton transcribeOutputBrowse;
@@ -87,6 +89,7 @@ private:
 	void onInputFolderCheck();
 	void onBrowseMedia();
 	void onBrowseOutput();
+	void updateMediaSelectionText();
 	// Despite the name, the method also handles the "Stop" button
 	void onTranscribe();
 	void onCapture()
@@ -103,6 +106,9 @@ private:
 	{
 		CString pathMedia;
 		CString pathOutput;
+		std::vector<CString> mediaFiles;
+		std::vector<CString> outputFiles;
+		size_t completedFiles = 0;
 		uint32_t language;
 		bool translate;
 		eOutputFormat format;
@@ -119,6 +125,7 @@ private:
 	LRESULT onCallbackStatus( UINT, WPARAM wParam, LPARAM, BOOL& bHandled );
 
 	HRESULT transcribe();
+	HRESULT transcribeOne();
 	void getThreadError();
 	
 	static HRESULT writeTextFile( const Whisper::sSegment* const segments, const size_t length, CAtlFile& file, bool timestamps );

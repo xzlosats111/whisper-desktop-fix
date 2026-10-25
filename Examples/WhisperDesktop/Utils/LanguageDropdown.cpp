@@ -31,12 +31,23 @@ namespace
 
 int LanguageDropdown::getInitialSelection( AppState& state ) const
 {
-	// This edition is deliberately a one-click Japanese subtitle tool.
-	// "ja" packed as a little-endian uint16, matching languageCodez.inl.
 	constexpr uint32_t japanese = 0x616A;
-	auto it = std::find( keys.begin(), keys.end(), japanese );
-	assert( it != keys.end() );
-	return (int)( it - keys.begin() );
+
+	// Load preference from the registry
+	uint32_t id = state.languageRead();
+	if( id == UINT_MAX )
+		id = japanese;
+
+	auto it = std::find( keys.begin(), keys.end(), id );
+	if( it == keys.end() )
+	{
+		id = japanese;
+		it = std::find( keys.begin(), keys.end(), id );
+		assert( it != keys.end() );
+	}
+
+	ptrdiff_t idx = it - keys.begin();
+	return (int)idx;
 }
 
 void LanguageDropdown::initialize( HWND owner, int idc, AppState& state )

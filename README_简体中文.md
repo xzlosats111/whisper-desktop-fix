@@ -1,39 +1,28 @@
-# 日语字幕工具（Windows / DirectCompute）
+# WhisperDesktop：简体中文日语字幕版
 
-这是基于 `const-me/whisper` 的简化改版，基础代码采用已加入 `large-v3`、`large-v3-turbo` 与 q4/q5/q8 GPU 量化支持的 fork。
+这是基于 `const-me/whisper` 的 Windows DirectCompute GUI 改版；底层使用 `sffxzzp/WhisperDesktop` 的量化模型支持，因此可使用 `ggml-large-v3-q5_0.bin`，也可使用同系列 q4/q8 模型。GTX 1080 Ti 使用 **GPU** 模型实现即可。
 
-## 这个版本做什么
+## 本版行为
 
-- 固定为 **日语音视频 → 日语 SRT**；
-- 固定使用显卡 GPU 后端，适合 GTX 1080 Ti；
-- 固定输出为源视频同目录、同名的 `.srt`；
-- 所有主要操作显示简体中文；
-- 适配官方 `ggml-large-v3-q5_0.bin`。
+- 所有中文 C++ 界面源码保留 UTF-8 BOM，避免 MSVC 将中文字符串编译成乱码；
+- 每次启动先显示 **加载 Whisper 模型** 窗口，已记住的模型路径会预填，但不会自动加载；
+- 默认语言为**日语**、默认输出为 **SubRip（.srt）**，但语言、翻译、字幕类型、输出位置均可自行选择；
+- 保留全部原有界面与功能：模型实现/GPU 高级设置、调试控制台、文件转写、实时麦克风转写、语言选择、翻译、文本/SRT/WebVTT 输出；
+- 媒体选择器加入 AVI、MP4、MKV、MOV、MPEG、WebM、FLV、WMV、WAV、MP3、M4A、AAC、FLAC、OGG 等常见格式；
+- 文件选择窗口支持按 **Ctrl / Shift 多选**；多选后会依次转写，每个文件输出同名字幕到各自源文件所在目录。
 
-## 使用方式
+## 日语 SRT 的常用操作
 
-1. 下载并放好模型：`ggml-large-v3-q5_0.bin`。
-2. 启动 `WhisperDesktop.exe`，首次选择模型。
-3. 点击“浏览…”选择日语视频或音频。
-4. 点击“开始生成 SRT”。
-5. 完成后字幕与视频保存在同一目录，例如：`episode.avi` → `episode.srt`。
+1. 启动 `WhisperDesktop.exe`，选择模型文件，例如 `ggml-large-v3-q5_0.bin`。
+2. 在“转写音频文件”窗口确认：语言为“日语”、输出格式为“SubRip 字幕”。
+3. 点击 `...` 选择一个或多个视频/音频文件；多选时请保持“输出至源文件位置”勾选。
+4. 点击“转写”。同目录会生成 `.srt` 文件。
 
-> Whisper 的内置翻译只能翻成英语。本工具先生成日语 SRT；要中文字幕，请用大模型翻译 SRT，保持时间码不变。
-
-
-## 一键发布到你的 GitHub 仓库
-
-本源码包已预设目标仓库 `https://github.com/xzlosats111/whisper-desktop-fix`。解压后双击 `发布到GitHub.cmd`：
-
-1. 脚本会用 Git for Windows 创建本地提交并推送到该仓库；
-2. 首次推送时，Git Credential Manager 通常会打开浏览器，请登录 GitHub 并授权；
-3. 推送完成后，仓库的 **Actions** 会自动构建 Windows 版本；完成时下载 artifact **WhisperDesktop-x64**。
-
-若电脑没有 Git，请先安装 [Git for Windows](https://git-scm.com/download/win)，使用默认安装选项。不要把 GitHub 密钥或令牌发到聊天中。
+Whisper 的内置“翻译”只翻译为英语；要中文 SRT，请先生成日文 SRT，再用翻译工具翻译文本并保留时间码。
 
 ## 模型校验
 
-官方 `large-v3-q5_0` 文件 SHA1：
+官方 `ggml-large-v3-q5_0.bin` 的 SHA1：
 
 ```text
 e6e2ed78495d403bef4b7cff42ef4aaadcfea8de
@@ -45,17 +34,14 @@ Windows 校验命令：
 certutil -hashfile ggml-large-v3-q5_0.bin SHA1
 ```
 
-## 构建 Windows 版本
+## 构建或 GitHub Actions
 
-需要 Windows 10/11、Visual Studio 2022 Community（勾选“使用 C++ 的桌面开发”）和 .NET SDK。
+仓库内 `.github/workflows/build.yml` 会在推送 `master` 分支后自动用 Windows 构建。完成后在 GitHub Actions 下载 artifact：`WhisperDesktop-x64`。
+
+本地构建需要 Windows 10/11、Visual Studio 2022（“使用 C++ 的桌面开发”）和 .NET SDK；在源码根目录运行：
 
 ```bat
 build_windows.cmd
 ```
 
-输出文件在：`x64\Release\WhisperDesktop.exe` 与 `x64\Release\Whisper.dll`。两者必须放在同一个文件夹。
-
-## 上游许可
-
-- 原项目：const-me/whisper（MPL-2.0）
-- 量化与 large-v3 扩展：sffxzzp/WhisperDesktop
+生成的 `WhisperDesktop.exe` 与 `Whisper.dll` 必须放在同一文件夹。

@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "LoadModelDlg.h"
 #include "Utils/miscUtils.h"
 #include "Utils/logger.h"
@@ -12,7 +12,17 @@ HRESULT LoadModelDlg::show()
 	if( res == -1 )
 		return HRESULT_FROM_WIN32( GetLastError() );
 	if( res == IDOK )
-		return SCREEN_TRANSCRIBE;
+	{
+		HRESULT hr = appState.lastScreenLoad();
+		switch( hr )
+		{
+		case SCREEN_TRANSCRIBE:
+		case SCREEN_CAPTURE:
+			return hr;
+		default:
+			return SCREEN_TRANSCRIBE;
+		}
+	}
 	return S_OK;
 }
 
@@ -22,12 +32,7 @@ LRESULT LoadModelDlg::OnInitDialog( UINT nMessage, WPARAM wParam, LPARAM lParam,
 	DoDataExchange( false );
 
 	cbConsole.initialize( m_hWnd, IDC_CONSOLE, appState );
-	// 日语字幕版只使用 GPU 实现：GTX 1080 Ti 等 Direct3D 11 显卡可直接使用。
-	// 量化 ggml (q4/q5/q8) 的 GPU 支持由本 fork 的着色器实现。
-	impl = Whisper::eModelImplementation::GPU;
-	implPopulateCombobox( cbModelType, impl );
-	cbModelType.EnableWindow( FALSE );
-	GetDlgItem( IDC_MODEL_ADV ).EnableWindow( FALSE );
+	implPopulateCombobox( cbModelType, appState.source.impl );
 	modelPath.SetWindowTextW( appState.source.path );
 
 	HRESULT hr = work.create( this );
@@ -65,7 +70,7 @@ LRESULT LoadModelDlg::OnBrowse( UINT, INT, HWND, BOOL& bHandled )
 
 	CString path;
 	modelPath.GetWindowText( path );
-	if( !getOpenFileName( m_hWnd, L"选择一个 Whisper GGML 模型文件", L"二进制文件 (*.bin)\0*.bin\0\0", path ) )
+	if( !getOpenFileName( m_hWnd, L"选择一个 GGML 模型文件", L"二进制文件 (*.bin)\0*.bin\0\0", path ) )
 		return 0;
 
 	modelPath.SetWindowText( path );
@@ -111,15 +116,16 @@ LRESULT LoadModelDlg::OnOk( UINT, INT, HWND, BOOL& bHandled )
 		CAtlFile file;
 		HRESULT hr = file.Create( path, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING );
 		if( FAILED( hr ) )
-			return validationError( L"无法打开模型文件。请确认文件没有下载到一半。", hr );
+			return validationError( L"无法打开模型文件", hr );
 
 		ULONGLONG cb = 0;
 		file.GetSize( cb );
 		appState.source.sizeInBytes = cb;
 	}
 
-	// 固定使用 GPU；不要让新用户误选未启用的 Hybrid / CPU 参考后端。
-	impl = Whisper::eModelImplementation::GPU;
+	impl = implGetValue( cbModelType );
+	if( impl == (Whisper::eModelImplementation)0 )
+		return validationError( L"请选择一个模型类型" );
 
 	setPending( true );
 	work.post();
@@ -161,10 +167,9 @@ void __stdcall LoadModelDlg::poolCallback() noexcept
 	lmcb.pv = this;
 	Whisper::sModelSetup setup;
 	setup.impl = impl;
-	// Do not inherit opaque advanced settings from an older WhisperDesktop install.
-	// The driver default adapter/settings are the reliable choice for GTX 1080 Ti.
-	setup.flags = 0;
-	setup.adapter = nullptr;
+	setup.flags = appState.gpuFlagsLoad();
+	CString adapter = appState.stringLoad( L"gpu" );
+	setup.adapter = adapter;
 	HRESULT hr = ::loadModel( path, setup, &lmcb, &model );
 	if( SUCCEEDED( hr ) )
 		appState.model = model;

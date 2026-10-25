@@ -40,7 +40,7 @@ public:
 	bool boolLoad( LPCTSTR name );
 	void boolStore( LPCTSTR name, bool val );
 
-	bool automaticallyLoadModel = true;
+	bool automaticallyLoadModel = false; // Always show the model selection dialog at startup.
 
 	void lastScreenSave( HRESULT code );
 	HRESULT lastScreenLoad();

@@ -1,27 +1,15 @@
-# 测试记录与发布说明
+# 测试记录与限制
 
-## 已完成的静态检查
+## 已做的源码检查
 
-- 日语语言代码固定为 `ja`（`0x616A`）。
-- 输出格式固定为 `SubRip / .srt`。
-- 选中视频/音频后，输出路径自动改为同目录同名 `.srt`。
-- 文件选择器包括 `.avi`、`.mp4`、`.mkv`、`.mov`、`.webm`、`.flv`、`.wav`、`.mp3`、`.m4a` 等常见格式。
-- 模型加载固定为 DirectCompute GPU 后端，并清除旧版注册表中的高级 GPU 设置影响。
-- 对话框资源已改为简体中文的“选择模型 → 选择媒体 → 开始生成 SRT”流程。
-- 源码修改已运行 `git diff --check`，未发现空白错误。
+- 恢复了原始完整的简体中文资源对话框：模型/GPU 高级设置、语言、翻译、字幕格式、输出路径和实时麦克风转写均可用。
+- 恢复所有含中文的 C++ 文件的 UTF-8 BOM；这是修复截图中“多语言 / 开始转写”等文字乱码的关键。
+- 启动行为改为始终先显示选择模型窗口，不自动加载上次模型。
+- 文件选择器使用 Windows `OFN_ALLOWMULTISELECT`，支持 Ctrl/Shift 多选；批量任务逐个转写并为每个源文件生成对应扩展名的输出文件。
+- 已对修改运行 `git diff --check`，并检查批量选择、文件筛选、SRT 默认、完整资源控件和 UTF-8 BOM 的静态条件。
 
-## 尚未完成的步骤
+## 仍未在本工作区执行的测试
 
-本工作区不是 Windows，且没有 Visual Studio、Windows SDK、Direct3D 编译器或可用的 Windows CI 授权。因此**没有在此处编译或实际运行 EXE**；不要把此源代码包误认为已测试的 Windows 成品。
+此环境没有 Windows、Visual Studio、Windows SDK、Direct3D 编译器或 GTX 1080 Ti。因此此更新包是**未在此环境编译/运行的源码更新**，不是已验证的 EXE。
 
-仓库自带 GitHub Actions Windows 构建流程。将本项目推送到个人 GitHub 仓库的 `master` 分支后，Actions 完成时可下载 `WhisperDesktop-x64` 构建产物。也可以在本机按 `README_简体中文.md` 使用 Visual Studio 2022 构建。源码包附带 `发布到GitHub.cmd`，用户在自己的 Windows 电脑运行它即可使用浏览器授权推送；该脚本不会要求把令牌发送到聊天中。
-
-## 最终 Windows 包应包含
-
-```text
-WhisperDesktop.exe
-Whisper.dll
-使用说明_简体中文.md
-```
-
-模型 `ggml-large-v3-q5_0.bin` 可以放在任意目录，首次启动时在界面中选择它，不必与 EXE 放在一起。
+推送到 GitHub 后，Windows Actions 会负责实际编译；请先下载其 `WhisperDesktop-x64` 产物测试。如果构建或运行报错，提供 Actions 日志或完整报错截图即可继续修复。

@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "TranscribeDlg.h"
 #include "Utils/logger.h"
 
@@ -23,6 +23,22 @@ static const LPCTSTR regValInput = L"sourceMedia";
 static const LPCTSTR regValOutFormat = L"resultFormat";
 static const LPCTSTR regValOutPath = L"resultPath";
 static const LPCTSTR regValUseInputFolder = L"useInputFolder";
+
+static const std::array<LPCTSTR, 4> batchOutputExtensions =
+{
+	L".txt", L".txt", L".srt", L".vtt"
+};
+
+static bool makeBatchOutputPath( CString& output, const CString& input, int formatIndex )
+{
+	if( formatIndex < 0 || formatIndex >= (int)batchOutputExtensions.size() )
+		return false;
+	output = input;
+	output.Trim();
+	const bool renamed = PathRenameExtension( output.GetBufferSetLength( output.GetLength() + 5 ), batchOutputExtensions[ formatIndex ] );
+	output.ReleaseBuffer();
+	return renamed;
+}
 
 LRESULT TranscribeDlg::OnInitDialog( UINT nMessage, WPARAM wParam, LPARAM lParam, BOOL& bHandled )
 {
@@ -58,18 +74,13 @@ LRESULT TranscribeDlg::OnInitDialog( UINT nMessage, WPARAM wParam, LPARAM lParam
 	progressBar.SetRange32( 0, progressMaxInteger );
 	progressBar.SetStep( 1 );
 
+	settingMediaPath = true;
 	sourceMediaPath.SetWindowText( appState.stringLoad( regValInput ) );
-
-	// Keep the visible workflow intentionally small:
-	// Japanese audio/video -> Japanese .srt next to the source media.
-	// eOutputFormat::SubRip has value 3; see the enum below.
-	transcribeOutFormat.SetCurSel( 3 );
-	useInputFolder.SetCheck( BST_CHECKED );
-	GetDlgItem( IDC_LANGUAGE ).EnableWindow( FALSE );
-	GetDlgItem( IDC_TRANSLATE ).EnableWindow( FALSE );
-	transcribeOutFormat.EnableWindow( FALSE );
-	// Keep the hidden checkbox enabled: its existing change handler refreshes the
-	// sibling .srt path whenever the user chooses a new media file.
+	settingMediaPath = false;
+	transcribeOutFormat.SetCurSel( (int)appState.dwordLoad( regValOutFormat, 3 ) );
+	transcribeOutputPath.SetWindowText( appState.stringLoad( regValOutPath ) );
+	if( appState.boolLoad( regValUseInputFolder ) )
+		useInputFolder.SetCheck( BST_CHECKED );
 	BOOL unused;
 	onOutFormatChange( 0, 0, nullptr, unused );
 
@@ -158,6 +169,8 @@ LRESULT TranscribeDlg::onOutFormatChange( UINT, INT, HWND, BOOL& bHandled )
 // EN_CHANGE notification for IDC_PATH_MEDIA edit box
 LRESULT TranscribeDlg::onInputChange( UINT, INT, HWND, BOOL& )
 {
+	if( !settingMediaPath )
+		selectedMediaPaths.clear();
 	if( !useInputFolder.IsWindowEnabled() )
 		return 0;
 	if( !isChecked( useInputFolder ) )
@@ -168,16 +181,43 @@ LRESULT TranscribeDlg::onInputChange( UINT, INT, HWND, BOOL& )
 
 void TranscribeDlg::onBrowseMedia()
 {
-	LPCTSTR title = L"选择视频或音频文件";
-	LPCTSTR filters = L"视频或音频文件\0*.avi;*.mp4;*.mkv;*.mov;*.mpeg;*.mpg;*.webm;*.flv;*.wav;*.wave;*.mp3;*.wma;*.m4a\0\0";
+	LPCTSTR title = L"选择视频或音频文件（可按 Ctrl / Shift 多选）";
+	LPCTSTR filters = L"视频或音频文件\0*.avi;*.mp4;*.mkv;*.mov;*.mpeg;*.mpeg4;*.mpg;*.webm;*.flv;*.wmv;*.wav;*.wave;*.mp3;*.wma;*.m4a;*.aac;*.flac;*.ogg\0所有文件 (*.*)\0*.*\0\0";
 
-	CString path;
-	sourceMediaPath.GetWindowText( path );
-	if( !getOpenFileName( m_hWnd, title, filters, path ) )
+	CString initialPath;
+	sourceMediaPath.GetWindowText( initialPath );
+	std::vector<CString> picked;
+	if( !getOpenFileNames( m_hWnd, title, filters, initialPath, picked ) )
 		return;
-	sourceMediaPath.SetWindowText( path );
-	if( useInputFolder.IsWindowEnabled() && useInputFolder.GetCheck() == BST_CHECKED )
-		setOutputPath( path );
+
+	selectedMediaPaths.swap( picked );
+	if( selectedMediaPaths.size() > 1 )
+	{
+		// One source produces one output. Same-folder output is unambiguous for a batch.
+		useInputFolder.SetCheck( BST_CHECKED );
+		onInputFolderCheck();
+	}
+	updateMediaSelectionText();
+	if( selectedMediaPaths.size() == 1 && isChecked( useInputFolder ) )
+		setOutputPath( selectedMediaPaths.front() );
+	else if( selectedMediaPaths.size() > 1 )
+		transcribeOutputPath.SetWindowText( L"批量模式：每个输出文件将保存到对应源文件的同一目录" );
+}
+
+void TranscribeDlg::updateMediaSelectionText()
+{
+	if( selectedMediaPaths.empty() )
+		return;
+	settingMediaPath = true;
+	if( selectedMediaPaths.size() == 1 )
+		sourceMediaPath.SetWindowText( selectedMediaPaths.front() );
+	else
+	{
+		CString text;
+		text.Format( L"已选择 %zu 个文件（第一个：%s）", selectedMediaPaths.size(), cstr( selectedMediaPaths.front() ) );
+		sourceMediaPath.SetWindowText( text );
+	}
+	settingMediaPath = false;
 }
 
 static const LPCTSTR outputFilters = L"文本文件 (*.txt)\0*.txt\0带时间戳的文本 (*.txt)\0*.txt\0SubRip 字幕 (*.srt)\0*.srt\0WebVTT 字幕 (*.vtt)\0*.vtt\0\0";
@@ -270,42 +310,83 @@ void TranscribeDlg::onTranscribe()
 		return;
 	}
 
-	// Validate input
-	sourceMediaPath.GetWindowText( transcribeArgs.pathMedia );
-	if( transcribeArgs.pathMedia.GetLength() <= 0 )
+	// Validate input. A manually typed path remains a one-file job.
+	transcribeArgs.mediaFiles = selectedMediaPaths;
+	if( transcribeArgs.mediaFiles.empty() )
 	{
-		transcribeError( L"请选择一个音频文件" );
+		CString typedPath;
+		sourceMediaPath.GetWindowText( typedPath );
+		if( typedPath.GetLength() > 0 )
+			transcribeArgs.mediaFiles.emplace_back( typedPath );
+	}
+	if( transcribeArgs.mediaFiles.empty() )
+	{
+		transcribeError( L"请选择一个视频或音频文件" );
 		return;
 	}
-
-	if( !PathFileExists( transcribeArgs.pathMedia ) )
+	for( const CString& mediaPath : transcribeArgs.mediaFiles )
 	{
-		transcribeError( L"选择的音频文件不存在", HRESULT_FROM_WIN32( ERROR_FILE_NOT_FOUND ) );
-		return;
+		if( !PathFileExists( mediaPath ) )
+		{
+			transcribeError( L"选择的视频或音频文件不存在", HRESULT_FROM_WIN32( ERROR_FILE_NOT_FOUND ) );
+			return;
+		}
 	}
+	transcribeArgs.pathMedia = transcribeArgs.mediaFiles.front();
 
-	// Fixed Japanese transcription. Whisper built-in translation only targets English,
-	// so it is deliberately disabled; translate the completed Japanese SRT separately.
-	transcribeArgs.language = 0x616A; // ja
-	transcribeArgs.translate = false;
+	transcribeArgs.language = languageSelector.selectedLanguage();
+	transcribeArgs.translate = cbTranslate.checked();
 	if( isInvalidTranslate( m_hWnd, transcribeArgs.language, transcribeArgs.translate ) )
 		return;
 
-	transcribeArgs.format = eOutputFormat::SubRip;
+	transcribeArgs.format = (eOutputFormat)(uint8_t)transcribeOutFormat.GetCurSel();
+	transcribeArgs.outputFiles.clear();
 	if( transcribeArgs.format != eOutputFormat::None )
 	{
-		transcribeOutputPath.GetWindowText( transcribeArgs.pathOutput );
-		if( transcribeArgs.pathOutput.GetLength() <= 0 )
+		if( transcribeArgs.mediaFiles.size() > 1 )
 		{
-			transcribeError( L"请选择用于输出的文本文档" );
-			return;
+			if( !isChecked( useInputFolder ) )
+			{
+				transcribeError( L"批量转写只能输出到每个源文件所在目录。请选择“输出至源文件位置”。" );
+				return;
+			}
+			for( const CString& mediaPath : transcribeArgs.mediaFiles )
+			{
+				CString outputPath;
+				if( !makeBatchOutputPath( outputPath, mediaPath, (int)transcribeArgs.format - 1 ) )
+				{
+					transcribeError( L"无法生成输出文件名" );
+					return;
+				}
+				transcribeArgs.outputFiles.emplace_back( outputPath );
+			}
 		}
-		if( PathFileExists( transcribeArgs.pathOutput ) )
+		else
 		{
-			const int resp = MessageBox( L"输出文件已存在。\n覆盖文件？", L"确认覆盖", MB_ICONQUESTION | MB_YESNO );
-			if( resp != IDYES )
+			transcribeOutputPath.GetWindowText( transcribeArgs.pathOutput );
+			if( transcribeArgs.pathOutput.GetLength() <= 0 )
+			{
+				transcribeError( L"请选择用于输出的文本文档" );
+				return;
+			}
+			transcribeArgs.outputFiles.emplace_back( transcribeArgs.pathOutput );
+		}
+
+		size_t existing = 0;
+		for( const CString& outputPath : transcribeArgs.outputFiles )
+			if( PathFileExists( outputPath ) )
+				existing++;
+		if( existing > 0 )
+		{
+			CString question;
+			if( transcribeArgs.outputFiles.size() == 1 )
+				question = L"输出文件已存在。\n覆盖文件？";
+			else
+				question.Format( L"有 %zu 个输出文件已存在。\n覆盖这些文件？", existing );
+			if( MessageBox( question, L"确认覆盖", MB_ICONQUESTION | MB_YESNO ) != IDYES )
 				return;
 		}
+		transcribeArgs.pathOutput = transcribeArgs.outputFiles.front();
 		appState.stringStore( regValOutPath, transcribeArgs.pathOutput );
 	}
 	else
@@ -319,7 +400,7 @@ void TranscribeDlg::onTranscribe()
 
 	setPending( true );
 	transcribeArgs.visualState = eVisualState::Running;
-	transcribeButton.SetWindowText( L"停止生成" );
+	transcribeButton.SetWindowText( L"停止" );
 	work.post();
 }
 
@@ -350,7 +431,7 @@ static void printTime( CString& rdi, int64_t ticks )
 LRESULT TranscribeDlg::onCallbackStatus( UINT, WPARAM wParam, LPARAM, BOOL& bHandled )
 {
 	setPending( false );
-	transcribeButton.SetWindowText( L"开始生成 SRT" );
+	transcribeButton.SetWindowText( L"转写" );
 	transcribeButton.EnableWindow( TRUE );
 	const bool prematurely = ( transcribeArgs.visualState == eVisualState::Stopping );
 	transcribeArgs.visualState = eVisualState::Idle;
@@ -377,9 +458,11 @@ LRESULT TranscribeDlg::onCallbackStatus( UINT, WPARAM wParam, LPARAM, BOOL& bHan
 	const int64_t media = transcribeArgs.mediaDuration;
 	CString message;
 	if( prematurely )
-		message = L"转写了音频的初始部分";
+		message = L"转写已停止，已处理音频的初始部分";
+	else if( transcribeArgs.completedFiles > 1 )
+		message.Format( L"已完成 %zu 个文件的转写", transcribeArgs.completedFiles );
 	else
-		message = L"转写了音频";
+		message = L"已完成文件转写";
 	message += L"\n媒体时长: ";
 	printTime( message, media );
 	message += L"\n处理时间: ";
@@ -387,10 +470,15 @@ LRESULT TranscribeDlg::onCallbackStatus( UINT, WPARAM wParam, LPARAM, BOOL& bHan
 	message += L"\n相对处理速度: ";
 	double mul = (double)media / (double)elapsed;
 	message.AppendFormat( L"%g", mul );
-	message += L"\n字幕文件: ";
-	message += transcribeArgs.pathOutput;
+	if( transcribeArgs.outputFiles.size() == 1 )
+	{
+		message += L"\n输出文件: ";
+		message += transcribeArgs.outputFiles.front();
+	}
+	else if( transcribeArgs.outputFiles.size() > 1 )
+		message += L"\n输出文件已分别保存到各源文件所在目录。";
 
-	MessageBox( message, L"日语 SRT 已生成", MB_OK | MB_ICONINFORMATION );
+	MessageBox( message, L"转写完成", MB_OK | MB_ICONINFORMATION );
 	return 0;
 }
 
@@ -404,8 +492,28 @@ void TranscribeDlg::getThreadError()
 HRESULT TranscribeDlg::transcribe()
 {
 	transcribeArgs.startTime = GetTickCount64();
-	clearLastError();
+	transcribeArgs.mediaDuration = 0;
+	transcribeArgs.completedFiles = 0;
 	transcribeArgs.errorMessage = L"";
+
+	for( size_t i = 0; i < transcribeArgs.mediaFiles.size(); i++ )
+	{
+		if( transcribeArgs.visualState == eVisualState::Stopping )
+			return S_FALSE;
+		transcribeArgs.pathMedia = transcribeArgs.mediaFiles[ i ];
+		if( i < transcribeArgs.outputFiles.size() )
+			transcribeArgs.pathOutput = transcribeArgs.outputFiles[ i ];
+		HRESULT hr = transcribeOne();
+		if( FAILED( hr ) )
+			return hr;
+		transcribeArgs.completedFiles++;
+	}
+	return S_OK;
+}
+
+HRESULT TranscribeDlg::transcribeOne()
+{
+	clearLastError();
 
 	using namespace Whisper;
 	CComPtr<iAudioReader> reader;
@@ -442,7 +550,9 @@ HRESULT TranscribeDlg::transcribe()
 	// Once finished, query duration of the audio.
 	// The duration before the processing is sometimes different, by 20 seconds for the file in that issue:
 	// https://github.com/Const-me/Whisper/issues/4
-	CHECK_EX( reader->getDuration( transcribeArgs.mediaDuration ) );
+	int64_t oneMediaDuration = 0;
+	CHECK_EX( reader->getDuration( oneMediaDuration ) );
+	transcribeArgs.mediaDuration += oneMediaDuration;
 
 	context->timingsPrint();
 

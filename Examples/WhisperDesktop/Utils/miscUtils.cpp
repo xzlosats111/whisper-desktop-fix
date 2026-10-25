@@ -187,6 +187,53 @@ bool getOpenFileName( HWND owner, LPCTSTR title, LPCTSTR filter, CString& path )
 	}
 }
 
+bool getOpenFileNames( HWND owner, LPCTSTR title, LPCTSTR filter, const CString& initialPath, std::vector<CString>& paths )
+{
+	// OFN_ALLOWMULTISELECT returns either one complete path, or a directory followed
+	// by several file names. This 32K buffer handles long batches safely.
+	std::vector<wchar_t> buffer( 32 * 1024, L'\0' );
+	if( initialPath.GetLength() > 0 && initialPath.GetLength() < (int)buffer.size() )
+		wcsncpy_s( buffer.data(), buffer.size(), initialPath, _TRUNCATE );
+
+	OPENFILENAME ofn;
+	memset( &ofn, 0, sizeof( ofn ) );
+	ofn.lStructSize = sizeof( OPENFILENAME );
+	ofn.hwndOwner = owner;
+	ofn.lpstrFilter = filter;
+	ofn.lpstrTitle = title;
+	ofn.Flags = OFN_EXPLORER | OFN_ALLOWMULTISELECT | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+	ofn.lpstrFile = buffer.data();
+	ofn.nMaxFile = (DWORD)buffer.size();
+
+	if( !GetOpenFileName( &ofn ) )
+		return false;
+
+	std::vector<CString> selected;
+	const wchar_t* current = buffer.data();
+	CString first = current;
+	current += first.GetLength() + 1;
+	if( *current == L'\0' )
+	{
+		selected.emplace_back( first );
+	}
+	else
+	{
+		CString directory = first;
+		if( directory.Right( 1 ) != L"\\" )
+			directory += L"\\";
+		while( *current != L'\0' )
+		{
+			CString fullPath = directory;
+			fullPath += current;
+			selected.emplace_back( fullPath );
+			current += wcslen( current ) + 1;
+		}
+	}
+
+	paths.swap( selected );
+	return !paths.empty();
+}
+
 bool getSaveFileName( HWND owner, LPCTSTR title, LPCTSTR filter, CString& path, DWORD* filterIndex )
 {
 	wchar_t buffer[ ofnBufferLength ];
