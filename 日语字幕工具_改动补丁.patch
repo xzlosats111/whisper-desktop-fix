@@ -1,0 +1,374 @@
+Upstream base checked out by this package:
+d12fddc9c2b2299182b4f33582055c0e94aef0a5
+2026-09-17T15:31:34-06:00
+feat: Compile on Github Actions
+
+Custom source diff (including resource changes):
+diff --git a/.github/workflows/build.yml b/.github/workflows/build.yml
+index 951b07c..757669a 100644
+--- a/.github/workflows/build.yml
++++ b/.github/workflows/build.yml
+@@ -1,4 +1,4 @@
+-name: Build Examples
++name: Build Japanese SRT Tool
+ 
+ on:
+   push:
+@@ -18,7 +18,7 @@ env:
+ 
+ jobs:
+   build:
+-    name: Build WhisperDesktop & main (Release x64)
++    name: Build Japanese SRT Tool (Release x64)
+     runs-on: windows-latest
+ 
+     steps:
+@@ -67,7 +67,7 @@ jobs:
+           }
+ 
+           Copy-Item ( Find-Binary 'WhisperDesktop.exe' ) "$out\WhisperDesktop\"
+-          Copy-Item "Examples\WhisperDesktop\Readme.txt" "$out\WhisperDesktop\"
++          Copy-Item "README_简体中文.md" "$out\WhisperDesktop\使用说明_简体中文.md"
+           Copy-Item ( Find-Binary 'main.exe' ) "$out\main\"
+           Copy-Item "Examples\main\Readme.txt" "$out\main\"
+ 
+diff --git a/Examples/WhisperDesktop/LoadModelDlg.cpp b/Examples/WhisperDesktop/LoadModelDlg.cpp
+index 44a95d1..a7616b5 100644
+--- a/Examples/WhisperDesktop/LoadModelDlg.cpp
++++ b/Examples/WhisperDesktop/LoadModelDlg.cpp
+@@ -1,4 +1,4 @@
+-﻿#include "stdafx.h"
++#include "stdafx.h"
+ #include "LoadModelDlg.h"
+ #include "Utils/miscUtils.h"
+ #include "Utils/logger.h"
+@@ -12,17 +12,7 @@ HRESULT LoadModelDlg::show()
+ 	if( res == -1 )
+ 		return HRESULT_FROM_WIN32( GetLastError() );
+ 	if( res == IDOK )
+-	{
+-		HRESULT hr = appState.lastScreenLoad();
+-		switch( hr )
+-		{
+-		case SCREEN_TRANSCRIBE:
+-		case SCREEN_CAPTURE:
+-			return hr;
+-		default:
+-			return SCREEN_TRANSCRIBE;
+-		}
+-	}
++		return SCREEN_TRANSCRIBE;
+ 	return S_OK;
+ }
+ 
+@@ -32,7 +22,12 @@ LRESULT LoadModelDlg::OnInitDialog( UINT nMessage, WPARAM wParam, LPARAM lParam,
+ 	DoDataExchange( false );
+ 
+ 	cbConsole.initialize( m_hWnd, IDC_CONSOLE, appState );
+-	implPopulateCombobox( cbModelType, appState.source.impl );
++	// 日语字幕版只使用 GPU 实现：GTX 1080 Ti 等 Direct3D 11 显卡可直接使用。
++	// 量化 ggml (q4/q5/q8) 的 GPU 支持由本 fork 的着色器实现。
++	impl = Whisper::eModelImplementation::GPU;
++	implPopulateCombobox( cbModelType, impl );
++	cbModelType.EnableWindow( FALSE );
++	GetDlgItem( IDC_MODEL_ADV ).EnableWindow( FALSE );
+ 	modelPath.SetWindowTextW( appState.source.path );
+ 
+ 	HRESULT hr = work.create( this );
+@@ -70,7 +65,7 @@ LRESULT LoadModelDlg::OnBrowse( UINT, INT, HWND, BOOL& bHandled )
+ 
+ 	CString path;
+ 	modelPath.GetWindowText( path );
+-	if( !getOpenFileName( m_hWnd, L"选择一个 GGML 模型文件", L"二进制文件 (*.bin)\0*.bin\0\0", path ) )
++	if( !getOpenFileName( m_hWnd, L"选择一个 Whisper GGML 模型文件", L"二进制文件 (*.bin)\0*.bin\0\0", path ) )
+ 		return 0;
+ 
+ 	modelPath.SetWindowText( path );
+@@ -116,16 +111,15 @@ LRESULT LoadModelDlg::OnOk( UINT, INT, HWND, BOOL& bHandled )
+ 		CAtlFile file;
+ 		HRESULT hr = file.Create( path, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING );
+ 		if( FAILED( hr ) )
+-			return validationError( L"无法打开模型文件", hr );
++			return validationError( L"无法打开模型文件。请确认文件没有下载到一半。", hr );
+ 
+ 		ULONGLONG cb = 0;
+ 		file.GetSize( cb );
+ 		appState.source.sizeInBytes = cb;
+ 	}
+ 
+-	impl = implGetValue( cbModelType );
+-	if( impl == (Whisper::eModelImplementation)0 )
+-		return validationError( L"请选择一个模型类型" );
++	// 固定使用 GPU；不要让新用户误选未启用的 Hybrid / CPU 参考后端。
++	impl = Whisper::eModelImplementation::GPU;
+ 
+ 	setPending( true );
+ 	work.post();
+@@ -167,9 +161,10 @@ void __stdcall LoadModelDlg::poolCallback() noexcept
+ 	lmcb.pv = this;
+ 	Whisper::sModelSetup setup;
+ 	setup.impl = impl;
+-	setup.flags = appState.gpuFlagsLoad();
+-	CString adapter = appState.stringLoad( L"gpu" );
+-	setup.adapter = adapter;
++	// Do not inherit opaque advanced settings from an older WhisperDesktop install.
++	// The driver default adapter/settings are the reliable choice for GTX 1080 Ti.
++	setup.flags = 0;
++	setup.adapter = nullptr;
+ 	HRESULT hr = ::loadModel( path, setup, &lmcb, &model );
+ 	if( SUCCEEDED( hr ) )
+ 		appState.model = model;
+diff --git a/Examples/WhisperDesktop/TranscribeDlg.cpp b/Examples/WhisperDesktop/TranscribeDlg.cpp
+index 89a568e..d9665dc 100644
+--- a/Examples/WhisperDesktop/TranscribeDlg.cpp
++++ b/Examples/WhisperDesktop/TranscribeDlg.cpp
+@@ -1,4 +1,4 @@
+-﻿#include "stdafx.h"
++#include "stdafx.h"
+ #include "TranscribeDlg.h"
+ #include "Utils/logger.h"
+ 
+@@ -59,10 +59,17 @@ LRESULT TranscribeDlg::OnInitDialog( UINT nMessage, WPARAM wParam, LPARAM lParam
+ 	progressBar.SetStep( 1 );
+ 
+ 	sourceMediaPath.SetWindowText( appState.stringLoad( regValInput ) );
+-	transcribeOutFormat.SetCurSel( (int)appState.dwordLoad( regValOutFormat, 0 ) );
+-	transcribeOutputPath.SetWindowText( appState.stringLoad( regValOutPath ) );
+-	if( appState.boolLoad( regValUseInputFolder ) )
+-		useInputFolder.SetCheck( BST_CHECKED );
++
++	// Keep the visible workflow intentionally small:
++	// Japanese audio/video -> Japanese .srt next to the source media.
++	// eOutputFormat::SubRip has value 3; see the enum below.
++	transcribeOutFormat.SetCurSel( 3 );
++	useInputFolder.SetCheck( BST_CHECKED );
++	GetDlgItem( IDC_LANGUAGE ).EnableWindow( FALSE );
++	GetDlgItem( IDC_TRANSLATE ).EnableWindow( FALSE );
++	transcribeOutFormat.EnableWindow( FALSE );
++	// Keep the hidden checkbox enabled: its existing change handler refreshes the
++	// sibling .srt path whenever the user chooses a new media file.
+ 	BOOL unused;
+ 	onOutFormatChange( 0, 0, nullptr, unused );
+ 
+@@ -161,8 +168,8 @@ LRESULT TranscribeDlg::onInputChange( UINT, INT, HWND, BOOL& )
+ 
+ void TranscribeDlg::onBrowseMedia()
+ {
+-	LPCTSTR title = L"选择音频文件";
+-	LPCTSTR filters = L"多媒体文件\0*.wav;*.wave;*.mp3;*.wma;*.mp4;*.mpeg4;*.mkv;*.m4a\0\0";
++	LPCTSTR title = L"选择视频或音频文件";
++	LPCTSTR filters = L"视频或音频文件\0*.avi;*.mp4;*.mkv;*.mov;*.mpeg;*.mpg;*.webm;*.flv;*.wav;*.wave;*.mp3;*.wma;*.m4a\0\0";
+ 
+ 	CString path;
+ 	sourceMediaPath.GetWindowText( path );
+@@ -277,12 +284,14 @@ void TranscribeDlg::onTranscribe()
+ 		return;
+ 	}
+ 
+-	transcribeArgs.language = languageSelector.selectedLanguage();
+-	transcribeArgs.translate = cbTranslate.checked();
++	// Fixed Japanese transcription. Whisper built-in translation only targets English,
++	// so it is deliberately disabled; translate the completed Japanese SRT separately.
++	transcribeArgs.language = 0x616A; // ja
++	transcribeArgs.translate = false;
+ 	if( isInvalidTranslate( m_hWnd, transcribeArgs.language, transcribeArgs.translate ) )
+ 		return;
+ 
+-	transcribeArgs.format = (eOutputFormat)(uint8_t)transcribeOutFormat.GetCurSel();
++	transcribeArgs.format = eOutputFormat::SubRip;
+ 	if( transcribeArgs.format != eOutputFormat::None )
+ 	{
+ 		transcribeOutputPath.GetWindowText( transcribeArgs.pathOutput );
+@@ -310,7 +319,7 @@ void TranscribeDlg::onTranscribe()
+ 
+ 	setPending( true );
+ 	transcribeArgs.visualState = eVisualState::Running;
+-	transcribeButton.SetWindowText( L"停止" );
++	transcribeButton.SetWindowText( L"停止生成" );
+ 	work.post();
+ }
+ 
+@@ -341,7 +350,7 @@ static void printTime( CString& rdi, int64_t ticks )
+ LRESULT TranscribeDlg::onCallbackStatus( UINT, WPARAM wParam, LPARAM, BOOL& bHandled )
+ {
+ 	setPending( false );
+-	transcribeButton.SetWindowText( L"转写" );
++	transcribeButton.SetWindowText( L"开始生成 SRT" );
+ 	transcribeButton.EnableWindow( TRUE );
+ 	const bool prematurely = ( transcribeArgs.visualState == eVisualState::Stopping );
+ 	transcribeArgs.visualState = eVisualState::Idle;
+@@ -378,8 +387,10 @@ LRESULT TranscribeDlg::onCallbackStatus( UINT, WPARAM wParam, LPARAM, BOOL& bHan
+ 	message += L"\n相对处理速度: ";
+ 	double mul = (double)media / (double)elapsed;
+ 	message.AppendFormat( L"%g", mul );
++	message += L"\n字幕文件: ";
++	message += transcribeArgs.pathOutput;
+ 
+-	MessageBox( message, L"转写完成", MB_OK | MB_ICONINFORMATION );
++	MessageBox( message, L"日语 SRT 已生成", MB_OK | MB_ICONINFORMATION );
+ 	return 0;
+ }
+ 
+diff --git a/Examples/WhisperDesktop/Utils/LanguageDropdown.cpp b/Examples/WhisperDesktop/Utils/LanguageDropdown.cpp
+index 36cd1a8..f0e02ca 100644
+--- a/Examples/WhisperDesktop/Utils/LanguageDropdown.cpp
++++ b/Examples/WhisperDesktop/Utils/LanguageDropdown.cpp
+@@ -31,23 +31,12 @@ namespace
+ 
+ int LanguageDropdown::getInitialSelection( AppState& state ) const
+ {
+-	constexpr uint32_t english = 0x6E65;
+-
+-	// Load preference from the registry
+-	uint32_t id = state.languageRead();
+-	if( id == UINT_MAX )
+-		id = english;
+-
+-	auto it = std::find( keys.begin(), keys.end(), id );
+-	if( it == keys.end() )
+-	{
+-		id = english;
+-		it = std::find( keys.begin(), keys.end(), id );
+-		assert( it != keys.end() );
+-	}
+-
+-	ptrdiff_t idx = it - keys.begin();
+-	return (int)idx;
++	// This edition is deliberately a one-click Japanese subtitle tool.
++	// "ja" packed as a little-endian uint16, matching languageCodez.inl.
++	constexpr uint32_t japanese = 0x616A;
++	auto it = std::find( keys.begin(), keys.end(), japanese );
++	assert( it != keys.end() );
++	return (int)( it - keys.begin() );
+ }
+ 
+ void LanguageDropdown::initialize( HWND owner, int idc, AppState& state )
+diff --git a/Examples/WhisperDesktop/WhisperDesktop.rc b/Examples/WhisperDesktop/WhisperDesktop.rc
+index e28401ba0ac03706e8fff7d34758a3702c1945a0..07d0597608d532bfbc6feb97c243bf34bfe9c26d 100644
+GIT binary patch
+literal 8766
+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
+
+literal 19130
+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
+IMyq=9KUPALWB>pF
+
+
+Untracked custom files included in the source archive:
+README_简体中文.md
+TESTING_与限制.md
+build_windows.cmd
+发布到GitHub.cmd
+日语字幕工具_改动说明.md
